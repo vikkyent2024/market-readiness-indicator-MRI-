@@ -5,130 +5,162 @@ indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true)
 // 1. INPUTS
 // ==========================================
 show_bg = input.bool(true, "Show Background Tint")
-persistence_bars = input.int(5, "Persistence Requirement (Bars)", minval=1, tooltip="Number of bars state must hold before changing")
 
 // ==========================================
-// 2. LOGIC ENGINE
+// 2. HELPER FUNCTIONS
+// ==========================================
+// Standard Normalize
+normalize(val, min, max) =>
+    (math.max(min, math.min(val, max)) - min) / (max - min) * 100
+
+// ==========================================
+// 3. MARKET DIMENSIONS
 // ==========================================
 
-// --- A. Directional Bias (Trend) ---
-// Using a stable Baseline (EMA 50) and structure
+// --- A. Direction (Bias) ---
+// EMA 50 Baseline + Slope
 baseline_len = 50
 baseline = ta.ema(close, baseline_len)
-dist_from_base = (close - baseline) / baseline * 100
-
-// Slope of baseline (10 bars)
-slope = (baseline - baseline[10]) / baseline[10]
-
-// Bias Rules:
-// 1. Price above Baseline
-// 2. Baseline Slope Positive
+// Slope over 5 bars for faster reaction than 10
+slope = (baseline - baseline[5]) / baseline[5]
+// Price relative to baseline
 bias_bullish = close > baseline and slope > 0
 bias_bearish = close < baseline and slope < 0
 
-// --- B.  Market Quality (Chop Filter) ---
-// Using Efficiency Ratio (ER)
-// High ER = Trend, Low ER = Chop
-length_er = 21
-change_abs = math.abs(close - close[length_er])
-volatility_sum = math.sum(math.abs(close - close[1]), length_er)
-er = volatility_sum != 0 ? change_abs / volatility_sum : 0
+// --- B. Quality (Efficiency) ---
+// Kaufman Efficiency Ratio (ER)
+len_er = 14 // Standard shorter length for reaction
+change = math.abs(close - close[len_er])
+vol_sum = math.sum(math.abs(close - close[1]), len_er)
+er = vol_sum != 0 ? change / vol_sum : 0
+// Quality Thresholds
+// > 0.30 = Trending/High Quality
+// < 0.20 = Chop/No Edge
+is_chop = er < 0.20
+is_quality = er >= 0.30
+// "Okay" quality is between 0.20 and 0.30
 
-// Pass Threshold: ER must be significant (> 0.25) to avoid dead chop
-is_quality = er > 0.25
+// --- C. Extension (Exhaustion) ---
+// Bollinger Band Width limit
+// If price > 2.2 SD, it's extended
+sd = ta.stdev(close, 50)
+upper_dev = baseline + (2.2 * sd)
+lower_dev = baseline - (2.2 * sd)
+is_extended_long = close > upper_dev
+is_extended_short = close < lower_dev
 
-// --- C. Extension Risk (Exhaustion) ---
-// Don't buy the top, don't sell the bottom
-// Use Deviation from Baseline
-stdev_base = ta.stdev(close, 50)
-upper_band = baseline + (2.0 * stdev_base)
-lower_band = baseline - (2.0 * stdev_base)
-
-// Risk Rules:
-is_exhausted_long = close > upper_band
-is_exhausted_short = close < lower_band
+// --- D. Volatility Risk (Avoid) ---
+// Detect extreme volatility spikes (Flash crash / Pump)
+atr = ta.atr(14)
+atr_avg = ta.sma(atr, 50)
+// If ATR is 2.5x the average, it's high risk
+is_vol_spike = atr > (atr_avg * 2.5)
 
 // ==========================================
-// 3. DECISION MATRIX (RAW)
+// 4. DECISION ENGINE (5 STATES)
 // ==========================================
-// 0 = NO TRADE, 1 = LONG, -1 = SHORT
-int raw_decision = 0
+// States:
+// 2  = LONG - Trend Active
+// -2 = SHORT - Trend Active
+// 1  = WAIT - Pullback / Reset
+// 0  = NO EDGE - Chop
+// -9 = AVOID - High Risk
 
-if is_quality // Only consider if market is efficient
-    if bias_bullish and not is_exhausted_long
-        raw_decision := 1
-    else if bias_bearish and not is_exhausted_short
-        raw_decision := -1
+int state = 0 
+
+// Priority Logic (Safety First)
+
+if is_vol_spike
+    state := -9 // AVOID
+else if is_chop // Low Efficiency
+    state := 0 // NO EDGE
+else
+    // Market is efficient enough to analyze
+    if bias_bullish
+        if is_extended_long
+            state := 1 // WAIT (Extended)
+        else
+            state := 2 // LONG
+    else if bias_bearish
+        if is_extended_short
+            state := 1 // WAIT (Extended)
+        else
+            state := -2 // SHORT
     else
-        raw_decision := 0 // Bias exists but exhausted
+        // Flat slope or stuck at baseline
+        state := 0 // NO EDGE
+
+// ==========================================
+// 5. TRANSITION RULES (HOLDING LOGIC)
+// ==========================================
+// Rule: Do NOT flip directly from LONG -> SHORT or SHORT -> LONG
+var int prev_major_state = 0 // Track last active trend (2 or -2)
+
+// If trying to flip trend directly
+if (state == 2 and prev_major_state == -2) or (state == -2 and prev_major_state == 2)
+    state := 0 // Force NO EDGE transit
+
+// Update history
+if state == 2 or state == -2
+    prev_major_state := state
+
+// ==========================================
+// 6. VISUALIZATION
+// ==========================================
+
+// Colors
+c_long  = color.new(#4caf50, 0) // Green
+c_short = color.new(#ef5350, 0) // Red
+c_wait  = color.new(#ff9800, 0) // Orange
+c_chop  = color.new(#9e9e9e, 0) // Grey
+c_avoid = color.new(#7e57c2, 0) // Purple/Dark
+
+c_bg_long  = color.new(#4caf50, 92)
+c_bg_short = color.new(#ef5350, 92)
+c_bg_wait  = color.new(#ff9800, 92)
+c_bg_chop  = color.new(#9e9e9e, 94)
+c_bg_avoid = color.new(#7e57c2, 90)
+
+// Text & Color Mapping
+var string txt = "NO EDGE - Chop"
+var color col = c_chop
+var color bgc = c_bg_chop
+
+if state == 2
+    txt := "LONG – Trend Active"
+    col := c_long
+    bgc := c_bg_long
+else if state == -2
+    txt := "SHORT – Trend Active"
+    col := c_short
+    bgc := c_bg_short
+else if state == 1
+    txt := "WAIT – Pullback / Reset"
+    col := c_wait
+    bgc := c_bg_wait
+else if state == -9
+    txt := "AVOID – High Risk"
+    col := c_avoid
+    bgc := c_bg_avoid
 else
-    raw_decision := 0 // Choppy
+    txt := "NO EDGE – Chop"
+    col := c_chop
+    bgc := c_bg_chop
 
-// ==========================================
-// 4. PERSISTENCE ENGINE
-// ==========================================
-// Requirement: raw_decision must be consistent for 'persistence_bars'
-// We track how many bars the *current* raw_decision has been active
-var int persistence_count = 0
-var int last_raw_decision = 0
+// Background
+bgcolor(show_bg ? bgc : na, title="State Background")
 
-if raw_decision == last_raw_decision
-    persistence_count := persistence_count + 1
-else
-    persistence_count := 1 // Reset count on change
-    last_raw_decision := raw_decision
-
-// Final Decision State
-// Only update final_decision if persistence requirement is met
-var int final_decision = 0
-
-if persistence_count >= persistence_bars
-    final_decision := raw_decision
-
-// ==========================================
-// 5. VISUALIZATION
-// ==========================================
-
-// Define Colors
-c_long = color.new(#4caf50, 0)
-c_short = color.new(#ef5350, 0)
-c_neutral = color.new(#9e9e9e, 0)
-
-c_long_bg = color.new(#4caf50, 90)
-c_short_bg = color.new(#ef5350, 90)
-c_neutral_bg = color.new(#9e9e9e, 90)
-
-// Determine State Vars for Output
-var string text_out = "NO TRADE ZONE"
-var color color_out = c_neutral
-var color bg_out = c_neutral_bg
-
-if final_decision == 1
-    text_out := "LONG CONDITIONS"
-    color_out := c_long
-    bg_out := c_long_bg
-else if final_decision == -1
-    text_out := "SHORT CONDITIONS"
-    color_out := c_short
-    bg_out := c_short_bg
-else
-    text_out := "NO TRADE ZONE"
-    color_out := c_neutral
-    bg_out := c_neutral_bg
-
-// Plot Background
-bgcolor(show_bg ? bg_out : na, title="Background")
-
-// Plot Table
+// Table Panel
 var table panel = table.new(position.top_right, 1, 2, border_width=0)
 
 if barstate.islast
-    // Heading
-    table.cell(panel, 0, 0, text_out, bgcolor=color_out, text_color=color.white, text_size=size.small, width=12)
-    // Subtitle
-    table.cell(panel, 0, 1, "Environment + Direction combined", bgcolor=color.new(color.white, 100), text_color=color.gray, text_size=size.tiny)
+    // Statistic Subtext
+    // Row 0: State
+    table.cell(panel, 0, 0, txt, bgcolor=col, text_color=color.white, text_size=size.small, width=16)
+    // Row 1: Subtitle
+    table.cell(panel, 0, 1, "This indicator defines when to trade, not how to enter.", bgcolor=color.new(color.white, 100), text_color=color.gray, text_size=size.tiny)
 
 // ==========================================
-// 6. ALERTS
+// 7. ALERTS
 // ==========================================
-alertcondition(final_decision != final_decision[1], title="Market State Changed", message="Market changed to {{plot_0}}")
+alertcondition(state != state[1], title="State Changed", message="MRI State changed to {{plot_0}}")
