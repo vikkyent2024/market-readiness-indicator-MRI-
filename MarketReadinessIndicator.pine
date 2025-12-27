@@ -1,0 +1,134 @@
+//@version=5
+indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true)
+
+// ==========================================
+// 1. INPUTS
+// ==========================================
+show_bg = input.bool(true, "Show Background Tint")
+persistence_bars = input.int(5, "Persistence Requirement (Bars)", minval=1, tooltip="Number of bars state must hold before changing")
+
+// ==========================================
+// 2. LOGIC ENGINE
+// ==========================================
+
+// --- A. Directional Bias (Trend) ---
+// Using a stable Baseline (EMA 50) and structure
+baseline_len = 50
+baseline = ta.ema(close, baseline_len)
+dist_from_base = (close - baseline) / baseline * 100
+
+// Slope of baseline (10 bars)
+slope = (baseline - baseline[10]) / baseline[10]
+
+// Bias Rules:
+// 1. Price above Baseline
+// 2. Baseline Slope Positive
+bias_bullish = close > baseline and slope > 0
+bias_bearish = close < baseline and slope < 0
+
+// --- B.  Market Quality (Chop Filter) ---
+// Using Efficiency Ratio (ER)
+// High ER = Trend, Low ER = Chop
+length_er = 21
+change_abs = math.abs(close - close[length_er])
+volatility_sum = math.sum(math.abs(close - close[1]), length_er)
+er = volatility_sum != 0 ? change_abs / volatility_sum : 0
+
+// Pass Threshold: ER must be significant (> 0.25) to avoid dead chop
+is_quality = er > 0.25
+
+// --- C. Extension Risk (Exhaustion) ---
+// Don't buy the top, don't sell the bottom
+// Use Deviation from Baseline
+stdev_base = ta.stdev(close, 50)
+upper_band = baseline + (2.0 * stdev_base)
+lower_band = baseline - (2.0 * stdev_base)
+
+// Risk Rules:
+is_exhausted_long = close > upper_band
+is_exhausted_short = close < lower_band
+
+// ==========================================
+// 3. DECISION MATRIX (RAW)
+// ==========================================
+// 0 = NO TRADE, 1 = LONG, -1 = SHORT
+int raw_decision = 0
+
+if is_quality // Only consider if market is efficient
+    if bias_bullish and not is_exhausted_long
+        raw_decision := 1
+    else if bias_bearish and not is_exhausted_short
+        raw_decision := -1
+    else
+        raw_decision := 0 // Bias exists but exhausted
+else
+    raw_decision := 0 // Choppy
+
+// ==========================================
+// 4. PERSISTENCE ENGINE
+// ==========================================
+// Requirement: raw_decision must be consistent for 'persistence_bars'
+// We track how many bars the *current* raw_decision has been active
+var int persistence_count = 0
+var int last_raw_decision = 0
+
+if raw_decision == last_raw_decision
+    persistence_count := persistence_count + 1
+else
+    persistence_count := 1 // Reset count on change
+    last_raw_decision := raw_decision
+
+// Final Decision State
+// Only update final_decision if persistence requirement is met
+var int final_decision = 0
+
+if persistence_count >= persistence_bars
+    final_decision := raw_decision
+
+// ==========================================
+// 5. VISUALIZATION
+// ==========================================
+
+// Define Colors
+c_long = color.new(#4caf50, 0)
+c_short = color.new(#ef5350, 0)
+c_neutral = color.new(#9e9e9e, 0)
+
+c_long_bg = color.new(#4caf50, 90)
+c_short_bg = color.new(#ef5350, 90)
+c_neutral_bg = color.new(#9e9e9e, 90)
+
+// Determine State Vars for Output
+var string text_out = "NO TRADE ZONE"
+var color color_out = c_neutral
+var color bg_out = c_neutral_bg
+
+if final_decision == 1
+    text_out := "LONG CONDITIONS"
+    color_out := c_long
+    bg_out := c_long_bg
+else if final_decision == -1
+    text_out := "SHORT CONDITIONS"
+    color_out := c_short
+    bg_out := c_short_bg
+else
+    text_out := "NO TRADE ZONE"
+    color_out := c_neutral
+    bg_out := c_neutral_bg
+
+// Plot Background
+bgcolor(show_bg ? bg_out : na, title="Background")
+
+// Plot Table
+var table panel = table.new(position.top_right, 1, 2, border_width=0)
+
+if barstate.islast
+    // Heading
+    table.cell(panel, 0, 0, text_out, bgcolor=color_out, text_color=color.white, text_size=size.small, width=12)
+    // Subtitle
+    table.cell(panel, 0, 1, "Environment + Direction combined", bgcolor=color.new(color.white, 100), text_color=color.gray, text_size=size.tiny)
+
+// ==========================================
+// 6. ALERTS
+// ==========================================
+alertcondition(final_decision != final_decision[1], title="Market State Changed", message="Market changed to {{plot_0}}")
