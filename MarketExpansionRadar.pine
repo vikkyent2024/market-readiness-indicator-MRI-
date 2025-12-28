@@ -1,0 +1,200 @@
+//@version=5
+// MER v2.0 - Final Cleanup (Timeframe Authority)
+// Philosophy: Contextual Radar. DECISION-ORIENTED.
+// Authority: Bias = Primary Timeframe. Execution = Chart Timeframe.
+indicator("Market Expansion Radar [MER]", shorttitle="MER", overlay=true, max_labels_count=50, max_lines_count=50)
+
+// ==========================================
+// 1. INPUTS
+// ==========================================
+group_auth = "Timeframe Authority"
+group_vis  = "Visuals"
+
+tf_primary = input.timeframe("D", "Primary Timeframe (Bias Source)", group=group_auth)
+lookback_len = input.int(200, "Stats Lookback Length", group=group_auth)
+
+show_panel = input.bool(true, "Show Context Panel", group=group_vis)
+show_highlight = input.bool(true, "Show Expansion Highlight", group=group_vis)
+show_markers = input.bool(false, "Show Event Markers", group=group_vis)
+bg_opacity = input.int(85, "Background Opacity", minval=0, maxval=100, group=group_vis)
+
+// ==========================================
+// 2. HELPER FUNCTIONS
+// ==========================================
+// Encapsulated Bias Logic for Security Call
+calc_bias_components(len) =>
+    // A. Efficiency & Stability (Used for Extended check later)
+    er_len = 10
+    change_abs = math.abs(close - close[er_len])
+    vol_sum = math.sum(math.abs(high - low), er_len)
+    er = vol_sum != 0 ? change_abs / vol_sum : 0
+    
+    // B. Structure (50%)
+    ma_200 = ta.ema(close, len)
+    score_struct_long = 0.0
+    if close > ma_200 
+        score_struct_long += 25
+    if ma_200 > ma_200[5]
+        score_struct_long += 25
+        
+    score_struct_short = 0.0
+    if close < ma_200
+        score_struct_short += 25
+    if ma_200 < ma_200[5]
+        score_struct_short += 25
+        
+    // C. Participation (30%)
+    vol_delta = math.sum(volume * (close >= open ? 1 : -1), 20)
+    score_part_long = vol_delta > 0 ? 30 : 0
+    score_part_short = vol_delta < 0 ? 30 : 0
+    
+    // D. HTF Context (20%) - 3x TF Proxy
+    ma_htf = ta.ema(close, len * 3)
+    score_htf_long = close > ma_htf ? 20 : 0
+    score_htf_short = close < ma_htf ? 20 : 0
+    
+    // Totals
+    bias_l = math.min(score_struct_long + score_part_long + score_htf_long, 95)
+    bias_s = math.min(score_struct_short + score_part_short + score_htf_short, 95)
+    
+    // Return Tuple
+    [bias_l, bias_s, ma_200, er]
+
+// ==========================================
+// 3. LOGIC: PRIMARY TIMEFRAME (BIAS)
+// ==========================================
+// Use request.security to get HTF values
+[htf_long_raw, htf_short_raw, htf_ma, htf_er] = request.security(syminfo.tickerid, tf_primary, calc_bias_components(200), lookahead=barmerge.lookahead_on)
+
+// Determine Primary Bias
+string primary_bias_dir = "Neutral"
+float primary_bias_score = 0.0
+
+if htf_long_raw > htf_short_raw
+    primary_bias_dir := "Long"
+    primary_bias_score := htf_long_raw
+else if htf_short_raw > htf_long_raw
+    primary_bias_dir := "Short"
+    primary_bias_score := htf_short_raw
+else 
+    // Tie or zero
+    primary_bias_score := math.max(htf_long_raw, htf_short_raw)
+
+// ==========================================
+// 4. LOGIC: CHART TIMEFRAME (EXECUTION)
+// ==========================================
+// Compression & Volatility
+atr = ta.atr(14)
+atr_sma = ta.sma(atr, 50)
+[bb_m, bb_u, bb_l] = ta.bb(close, 20, 2.0)
+bb_w = bb_m != 0 ? (bb_u - bb_l) / bb_m : 0
+bb_w_sma = ta.sma(bb_w, 50)
+
+is_atr_low = atr < (atr_sma * 0.8)
+is_bb_sqz  = bb_w < (bb_w_sma * 0.8)
+float atr_ratio = atr_sma != 0 ? atr / atr_sma : 1.0
+
+// Execution States
+// 1. Extended (Overstretched or Volatile)
+is_extended = atr_ratio > 1.6
+// 2. Compression (Coiling)
+is_compression = is_atr_low or is_bb_sqz
+// 3. Expanding (Normal action)
+// Default if not others
+
+string exec_state = "Expanding"
+if is_extended
+    exec_state := "Extended"
+else if is_compression
+    exec_state := "Compression"
+
+// ==========================================
+// 5. LOGIC: ACTION HINT & CONFLICT
+// ==========================================
+// Chart TF Structure
+ma_200_chart = ta.ema(close, 200)
+bool chart_uptrend = close > ma_200_chart
+bool chart_downtrend = close < ma_200_chart
+
+string action_hint = "Wait"
+bool execution_blocked = false
+
+if primary_bias_dir == "Long"
+    if chart_uptrend
+        // Aligned
+        if exec_state == "Compression"
+            action_hint := "Prepare Long"
+        else if exec_state == "Expanding"
+            action_hint := "Hold / Trail"
+        else // Extended
+            action_hint := "Take Profit"
+    else
+        // Conflict (Pullback)
+        action_hint := "Blocked (Pullback)"
+        execution_blocked := true
+
+else if primary_bias_dir == "Short"
+    if chart_downtrend
+        if exec_state == "Compression"
+            action_hint := "Prepare Short"
+        else if exec_state == "Expanding"
+            action_hint := "Hold / Trail"
+        else
+            action_hint := "Take Profit"
+    else
+        action_hint := "Blocked (Pullback)"
+        execution_blocked := true
+else
+    action_hint := "No Bias"
+
+// ==========================================
+// 6. VISUALS: BACKGROUND & LABELS
+// ==========================================
+// Background respects PRIMARY BIAS Only
+// Show Expanding (Teal/Orange) or Compression (Gray/Blue tint?)
+// Spec: "Teal shading when bias is Long... Orange when Short"
+// Only shade if NOT blocked? Spec: "Shading reflects PRIMARY bias only".
+// We will shade based on Primary Bias + Expanding State to keep it clean.
+color c_bg = na
+if not execution_blocked
+    if primary_bias_dir == "Long"
+        c_bg := color.new(color.teal, bg_opacity)
+    else if primary_bias_dir == "Short"
+        c_bg := color.new(color.orange, bg_opacity)
+
+bgcolor(show_highlight ? c_bg : na, title="Bias Background")
+
+// Markers
+// Only major state changes
+bool state_changed = exec_state != exec_state[1]
+if show_markers and state_changed
+    label.new(bar_index, high, text=exec_state, style=label.style_none, textcolor=color.gray, size=size.small)
+
+// ==========================================
+// 7. PANEL (Source of Truth)
+// ==========================================
+var table panel = table.new(position.bottom_right, 1, 5, border_width=0, frame_color=color.gray, frame_width=1)
+
+// Colors
+color c_bias = primary_bias_dir == "Long" ? color.green : (primary_bias_dir == "Short" ? color.red : color.gray)
+color c_hint = execution_blocked ? color.orange : color.blue
+
+if barstate.islast and show_panel
+    // Header
+    table.cell(panel, 0, 0, "MER v2 (Timeframe Authority)", bgcolor=color.new(color.gray, 90), text_size=size.normal)
+    
+    // Row 1: Primary Bias (HTF)
+    string txt_r1 = "Primary Bias: " + primary_bias_dir + " (" + str.tostring(primary_bias_score, "#") + "%)"
+    table.cell(panel, 0, 1, txt_r1, text_color=c_bias, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    
+    // Row 2: Execution State (LTF)
+    string txt_r2 = "Execution State: " + exec_state
+    table.cell(panel, 0, 2, txt_r2, text_color=color.black, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    
+    // Row 3: Action Hint
+    string txt_r3 = "Action: " + action_hint
+    table.cell(panel, 0, 3, txt_r3, text_color=c_hint, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    
+    // Row 4: Structure
+    string struct_txt = "Structure: " + (chart_uptrend ? "Uptrend" : "Downtrend")
+    table.cell(panel, 0, 4, struct_txt, text_color=color.gray, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
