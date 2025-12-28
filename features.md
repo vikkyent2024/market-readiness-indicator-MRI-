@@ -81,6 +81,8 @@ A 0-100 Score displayed in the table subtitle.
 
 ### 2. Pullback Opportunity Gating (Strict Mode)
 
+*(Input: `Enable Strict Pullback Gating`)*
+
 Prevents overtrading in long trends.
 
 * **Actionable**: The *first* qualified pullback in a leg is marked `(ACTIONABLE)`.
@@ -95,6 +97,8 @@ Professional support/resistance boxes.
 * **Visibility**: Only visible when trading is allowed (`LONG` or `WAIT-GOOD`).
 
 ### 4. Entry Triggers (Optional)
+
+*(Inputs: `Enable Pullback Triggers`, `Trigger: EMA Reclaim`, `Trigger: Structure Break`)*
 
 If enabled, text notifications appear in the table when:
 

@@ -1,8 +1,8 @@
 //@version=5
-// UPDATE: Fixed "No Lines" issue by using direct line.new() on last bar.
+// UPDATE: Added Semantic Labels to S/R lines.
 // Logic: No logic update.
-// Visuals: Forces fresh line rendering on every realtime update.
-indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true, max_boxes_count=50, max_lines_count=50)
+// Visuals: Text labels for "Institutional Demand/Supply" and "Overhead/Below".
+indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true, max_boxes_count=50, max_lines_count=50, max_labels_count=50)
 
 // ==========================================
 // 1. INPUTS
@@ -316,12 +316,17 @@ type ZDist
 // Persistent handles for visual lines
 var line vis_sup_line = na
 var line vis_res_line = na
+// Persistent handles for visual labels
+var label vis_sup_lbl = na
+var label vis_res_lbl = na
 
 // MAIN VISUALIZATION BLOCK (Inlined for reliability)
 if barstate.islast
     // Cleanup previous frame
     line.delete(vis_sup_line)
     line.delete(vis_res_line)
+    label.delete(vis_sup_lbl)
+    label.delete(vis_res_lbl)
     
     // Temp sorting arrays
     var dist_sup_temp = array.new<ZDist>(0)
@@ -380,18 +385,22 @@ if barstate.islast
             ZDist w_sup = array.get(dist_sup_temp, best_sup_idx)
             Zone z_sup = array.get(zone_arr, w_sup.index)
             
-            float sup_mid = (z_sup.top + z_sup.bot) / 2
-            vis_sup_line := line.new(bar_index - 5, sup_mid, bar_index + 25, sup_mid, color=color.green, width=2, style=line.style_solid)
-
-
+            vis_sup_line := line.new(bar_index - 5, z_sup.price, bar_index + 25, z_sup.price, color=color.new(color.green, 0), width=2, style=line.style_solid)
+            
+            // Label
+            string t_sup = "Institutional Demand (Support)\nNext Major Support Below"
+            vis_sup_lbl := label.new(bar_index + 25, z_sup.price, text=t_sup, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.large)
             
         // DRAW RESISTANCE
         if best_res_idx != -1
             ZDist w_res = array.get(dist_res_temp, best_res_idx)
             Zone z_res = array.get(zone_arr, w_res.index)
             
-            float res_mid = (z_res.top + z_res.bot) / 2
-            vis_res_line := line.new(bar_index - 5, res_mid, bar_index + 25, res_mid, color=color.red, width=2)
+            vis_res_line := line.new(bar_index - 5, z_res.price, bar_index + 25, z_res.price, color=color.new(color.red, 0), width=2, style=line.style_solid)
+            
+            // Label
+            string t_res = "Institutional Supply (Resistance)\nActive Overhead Supply"
+            vis_res_lbl := label.new(bar_index + 25, z_res.price, text=t_res, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.large)
 
 
 // ==========================================
