@@ -1,9 +1,9 @@
 //@version=5
 // Market Readiness Indicator [MRI]
-// Version: v1.0
-// Status: Locked / Stable Release
+// Version: v1.1
+// Status: UX Enhancement (Dev)
 // Date: 2025-12-28
-// Note: This version is frozen. Future changes must be additive only.
+// Note: v1.0 logic preserved. Added Active Window Highlight + Stats Panel.
 indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true, max_boxes_count=50, max_lines_count=50, max_labels_count=50)
 
 // ==========================================
@@ -567,6 +567,19 @@ if not data_ok
 
 // Background
 bgcolor(show_bg ? bgc : na, title="State Background")
+
+// ==========================================
+// 12. v1.1 UX ENHANCEMENTS
+// ==========================================
+
+// A. ACTIVE WINDOW HIGHLIGHT
+// Purpose: Visually highlight when Market Conditions are Favorable (pb_score >= 60)
+// Condition: is_wait_good is TRUE
+color c_active_window = is_wait_good ? color.new(color.green, 92) : na
+bgcolor(c_active_window, title="Active Window Highlight")
+
+// B. STATS PANEL (Minimal)
+// Removed by user request. Active Window Highlight retained.
 
 // Table Panel
 var table panel = table.new(position.top_right, 1, 2, border_width=0)
