@@ -1,73 +1,55 @@
-# Market Readiness Indicator (MRI) - Features Guide
+# Market Readiness Indicator (MRI) - V1 Features Guide (Frozen)
 
 ## 🚀 Core Philosophy
 
-The **Market Readiness Indicator (MRI)** is a professional **Trading Permission Engine**. Unlike standard indicators that spam "Buy/Sell" signals, the MRI answers the most important question in trading:
+The **Market Readiness Indicator (MRI)** is an institutional-grade **Trading Permission Engine**.
+It answers exactly one question: **"What type of trading is allowed in the current market state?"**
 
-> **"Is the market environment safe to trade right now, and in which direction?"**
-
-It prevents overtrading by strictly defining when you have **Edge** and when you should **Sit Out**.
+It is designed to be **Opportunity-Preserving**, not restrictive. It acts as a "Mode Selector" for your strategy.
 
 ---
 
-## 🚦 The 5 Market States
+## 🚦 The 5 Market States (V1 Semantics)
 
-The MRI classifies every candle into one of 5 clear semantic states.
+The MRI classifies the market into 5 distinct permission states.
 
-| State | Color | Definition | Action Rule |
+| State | Color | Definition | Allowed Trading Behavior |
 | :--- | :--- | :--- | :--- |
-| **LONG – Trend Active** | 🟢 **Green** | **Bullish Trend + High Quality.** The market is moving up efficiently and is not properly exhausted. | **Look for BUYS.** Ignore sell signals. |
-| **SHORT – Trend Active** | 🔴 **Red** | **Bearish Trend + High Quality.** The market is moving down efficiently and is not properly exhausted. | **Look for SELLS.** Ignore buy signals. |
-| **WAIT – Pullback / Reset** | 🟠 **Orange** | **Trend Paused.** The market has directional bias but is either over-extended or temporarily consolidating. | **HOLD / MANAGE.** Do not enter new positions. Wait for Green/Red or Gray. |
-| **NO EDGE – Chop** | ⚪ **Grey** | **No Direction.** The market is chopping sideways with low efficiency and unclear bias. | **DO NOT TRADE.** Protect capital. |
-| **AVOID – High Risk** | 🟣 **Purple**| **Extreme Volatility.** Flash crash, news spike, or pump/dump action detected. | **STAY OUT.** High risk of slippage and whipsaw. |
+| **LONG – Trend Active** | 🟢 **Green** | **Trend + Momentum Aligned.** Market is structurally bullish and high-quality. | **Aggressive Longs Allowed.** Hold winners, buy breakouts, add to positions. |
+| **SHORT – Trend Active** | 🔴 **Red** | **Trend + Momentum Aligned.** Market is structurally bearish and high-quality. | **Aggressive Shorts Allowed.** Hold winners, sell breakdowns, add to positions. |
+| **WAIT – Pullback / Reset** | 🟠 **Orange** | **Trend Intact, Momentum Paused.** Price is extended or consolidating, but the trend is NOT broken. | **Mean Reversion / Pullback Buys ONLY.** Do not chase breakouts. Look for dips to value. |
+| **NO EDGE – Chop** | ⚪ **Grey** | **Structure Degrading.** No clear directional bias or low efficiency. | **Diffensive / Reduced Size.** Avoid new entries. Tighten stops. |
+| **AVOID – High Risk** | 🟣 **Purple**| **Structural Break / Extreme Risk.** Flash crash or volatility shock. | **Cash / Hedge.** No directional trades. |
 
 ---
 
-## 🛡️ Smart Logic & Safety Guardrails
+## 🛡️ Algo & Strategy Integration rules
 
-### 1. No "Signal Flipping"
+If using the MRI in an automated or discretionary system, follow these integration rules:
 
-The MRI will **never** flip directly from **LONG** to **SHORT** (or vice versa).
+### 1. The "WAIT" Rule (Critical)
 
-* It enforces a logical market cycle: `Trend -> Wait -> Chop -> New Trend`.
-* This prevents you from getting caught in "whipsaws" at the top or bottom of moves.
+* **Old Retail Thinking**: "Wait means stop."
+* **Institutional MRI Logic**: "Wait means **Trend Continuation Zone**."
+* **Action**: If you see `WAIT` in a Bull Trend, you are **allowed** to buy support/dips. You are **blocked** from buying high breakouts.
 
-### 2. Graceful Degradation
+### 2. State Logic
 
-Trends don't just disappear instantly.
+* **LONG** = Permission for **Momentum** Strategies.
+* **WAIT** = Permission for **Mean Reversion** Strategies.
+* **NO EDGE** = Permission for **Range** Strategies (if advanced) or Cash.
 
-* If a strong trend weakens, the MRI downgrades it to **WAIT** first, giving you time to manage stops or take profit.
-* It will only go to **NO EDGE** if the market actively loses its directional structure.
+### 3. Stability Guardrails
 
-### 3. "Stickiness" & Stability
-
-* **2-Bar Confirmation**: A new state must persist for 2 consecutive bars before the signal changes. This eliminates flickering on live candles.
-* **No Repainting**: Once a bar closes, the state is locked. It will never change retroactively.
-
-### 4. Volatility Protection
-
-* The indicator automatically detects "Exhaustion" (when price moves too far from the average) and switches to **WAIT**, preventing you from buying the absolute top or selling the absolute bottom.
+* **No Flipping**: MRI will never flip Green → Red directly. It respects market inertia.
+* **Graceful Degradation**: Trends fade to WAIT before failing to NO EDGE.
 
 ---
 
-## 📉 How to Use in Your Strategy
-
-The MRI is **not** a strategy itself; it is a filter for *your* strategy.
-
-1. **If MRI is GREEN**: You have permission to trade your Bullish Setup (e.g., Bull Flag, Breakout, Support Bounce).
-2. **If MRI is RED**: You have permission to trade your Bearish Setup (e.g., Bear Flag, Breakdown, Resistance Reject).
-3. **If MRI is GREY/ORANGE**: You sit on your hands. **Preserving capital is a trading position.**
-
----
-
-## 📋 Technical Specs
+## 📋 Technical Specs (V1)
 
 * **Platform**: TradingView (Pine Script v5)
-* **Overlay**: Yes (Background Tint + dashboard)
-* **Timeframes**: Works on all timeframes (best on 5m, 15m, 1H, 4H).
-* **Asset Class**: Stocks, Crypto, Forex, Futures.
+* **Logic**: 5-State Semantic Model (Bias + Quality + Extension)
+* **Version**: V1 (Frozen)
 
----
-
-> *"This indicator defines when to trade, not how to enter."*
+> *"This indicator defines trade mode, not trade entry."*
