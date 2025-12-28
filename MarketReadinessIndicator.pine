@@ -35,10 +35,10 @@ vol_sum = math.sum(math.abs(close - close[1]), len_er)
 er = vol_sum != 0 ? change / vol_sum : 0
 // Quality Thresholds
 // > 0.30 = Trending/High Quality
-// < 0.20 = Chop/No Edge
-is_chop = er < 0.20
+// < 0.15 = Chop/No Edge
+is_chop = er < 0.15
 is_quality = er >= 0.30
-// "Okay" quality is between 0.20 and 0.30
+// "Okay" quality is between 0.15 and 0.30
 
 // --- C. Extension (Exhaustion) ---
 // Bollinger Band Width limit
@@ -72,22 +72,20 @@ int state = 0
 
 if is_vol_spike
     state := -9 // AVOID
-else if is_chop // Low Efficiency
-    state := 0 // NO EDGE
 else
-    // Market is efficient enough to analyze
+    // Bias Logic First
     if bias_bullish
-        if is_extended_long
-            state := 1 // WAIT (Extended)
+        if is_quality and not is_extended_long
+            state := 2 // LONG (Good Quality + Not Extended)
         else
-            state := 2 // LONG
+            state := 1 // WAIT (Extended OR Low Quality, but Bias holds)
     else if bias_bearish
-        if is_extended_short
-            state := 1 // WAIT (Extended)
+        if is_quality and not is_extended_short
+            state := -2 // SHORT (Good Quality + Not Extended)
         else
-            state := -2 // SHORT
+            state := 1 // WAIT (Extended OR Low Quality, but Bias holds)
     else
-        // Flat slope or stuck at baseline
+        // Bias is strictly neutral (Flat or conflicting)
         state := 0 // NO EDGE
 
 // ==========================================
@@ -99,6 +97,12 @@ var int prev_major_state = 0 // Track last active trend (2 or -2)
 // If trying to flip trend directly
 if (state == 2 and prev_major_state == -2) or (state == -2 and prev_major_state == 2)
     state := 0 // Force NO EDGE transit
+
+// Graceful Degradation Logic
+// If we drop from a trend to NO EDGE directly, force WAIT instead
+if state == 0
+    if state[1] == 2 or state[1] == -2
+        state := 1
 
 // Update history
 if state == 2 or state == -2
