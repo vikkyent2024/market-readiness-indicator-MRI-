@@ -1,7 +1,9 @@
 //@version=5
-// UPDATE: Added Semantic Labels to S/R lines.
-// Logic: No logic update.
-// Visuals: Text labels for "Institutional Demand/Supply" and "Overhead/Below".
+// Market Readiness Indicator [MRI]
+// Version: v1.0
+// Status: Locked / Stable Release
+// Date: 2025-12-28
+// Note: This version is frozen. Future changes must be additive only.
 indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true, max_boxes_count=50, max_lines_count=50, max_labels_count=50)
 
 // ==========================================
@@ -385,11 +387,40 @@ if barstate.islast
             ZDist w_sup = array.get(dist_sup_temp, best_sup_idx)
             Zone z_sup = array.get(zone_arr, w_sup.index)
             
-            vis_sup_line := line.new(bar_index - 5, z_sup.price, bar_index + 25, z_sup.price, color=color.new(color.green, 0), width=2, style=line.style_solid)
-            
             // Label
-            string t_sup = "Institutional Demand (Support)\nNext Major Support Below"
-            vis_sup_lbl := label.new(bar_index + 25, z_sup.price, text=t_sup, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.large)
+            // 1. Compute % Distance (Signed)
+            // If Close > Price, positive. If Close < Price, negative.
+            float sup_dist_signed = (close - z_sup.price) / z_sup.price * 100
+            
+            // 2. Classify State
+            string t_sup_state = ""
+            color c_sup_state = color.green
+            string s_sup_style = line.style_solid
+            
+            if sup_dist_signed >= 0.3
+                // HOLDING
+                t_sup_state := "Holding Above Support"
+                c_sup_state := color.green
+                s_sup_style := line.style_solid
+            else if math.abs(sup_dist_signed) < 0.3
+                // TESTING
+                t_sup_state := "Support Under Test\nReclaim Required"
+                c_sup_state := color.orange
+                s_sup_style := line.style_dashed
+            else
+                // BROKEN ( <= -0.3 )
+                t_sup_state := "Support Broken\nWatch Next Demand Zone"
+                c_sup_state := color.gray
+                s_sup_style := line.style_dashed
+            
+            // 3. Draw Line with Dynamic Style
+            vis_sup_line := line.new(bar_index - 5, z_sup.price, bar_index + 25, z_sup.price, color=color.new(c_sup_state, 0), width=2, style=s_sup_style)
+            
+            // 4. Construct Label
+            float sup_dist_pct = math.abs((z_sup.price - close) / close) * 100
+            string s_dir = z_sup.price < close ? "Below" : "Above"
+            string t_sup = "Institutional Demand (Support)\n@ " + str.tostring(z_sup.price, "#.##") + "\n" + str.tostring(sup_dist_pct, "#.#") + "% " + s_dir + " Current Price\n" + t_sup_state
+            vis_sup_lbl := label.new(bar_index + 25, z_sup.price, text=t_sup, style=label.style_label_left, color=color.new(c_sup_state, 20), textcolor=color.white, size=size.normal)
             
         // DRAW RESISTANCE
         if best_res_idx != -1
@@ -399,8 +430,10 @@ if barstate.islast
             vis_res_line := line.new(bar_index - 5, z_res.price, bar_index + 25, z_res.price, color=color.new(color.red, 0), width=2, style=line.style_solid)
             
             // Label
-            string t_res = "Institutional Supply (Resistance)\nActive Overhead Supply"
-            vis_res_lbl := label.new(bar_index + 25, z_res.price, text=t_res, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.large)
+            float res_dist_pct = math.abs((z_res.price - close) / close) * 100
+            string r_dir = z_res.price > close ? "Above" : "Below"
+            string t_res = "Institutional Supply (Resistance)\n@ " + str.tostring(z_res.price, "#.##") + "\n" + str.tostring(res_dist_pct, "#.#") + "% " + r_dir + " Current Price\nActive Overhead Supply"
+            vis_res_lbl := label.new(bar_index + 25, z_res.price, text=t_res, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.normal)
 
 
 // ==========================================
@@ -472,7 +505,7 @@ else if confirmed_state == -2
 else if confirmed_state == 1
     // Split logic for WAIT
     if is_wait_good
-        txt := "WAIT – Pullback (GOOD)"
+        txt := "WAIT – Market Conditions Favorable"
         col := c_wait
         bgc := c_bg_wait_good
         
@@ -486,7 +519,7 @@ else if confirmed_state == 1
             else
                 sub_txt := sub_txt + " (COOLDOWN)"
         else
-            sub_txt := sub_txt + " (Safe to Enter)"
+            sub_txt := sub_txt + " (Trend & Volatility Stable)\nEntry depends on price location vs Support / Resistance"
         
         // Append Trigger Info if fired
         if trig_ema
@@ -495,10 +528,10 @@ else if confirmed_state == 1
             sub_txt := sub_txt + "\nTrigger: Structure Break"
         
     else
-        txt := "WAIT – Pullback (BAD)"
+        txt := "WAIT – Market Conditions Unstable"
         col := c_wait
         bgc := c_bg_wait
-        sub_txt := "PullbackScore: " + str.tostring(pb_score, "#") + "/100 (High Risk)"
+        sub_txt := "PullbackScore: " + str.tostring(pb_score, "#") + "/100 (High Volatility or Weak Trend)\nEntry depends on price location vs Support / Resistance"
 
 else if confirmed_state == -9
     txt := "AVOID – High Risk"
@@ -511,6 +544,25 @@ else
     col := c_chop
     bgc := c_bg_chop
     sub_txt := "This indicator defines when to trade, not how to enter."
+
+
+// TASK: HTF Context & Safeguards
+bool is_htf = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1W")
+bool data_ok = not na(pb_score) and not na(atr_avg) and not na(er)
+
+if confirmed_state == 1
+    // Add Timeframe Context
+    string context_txt = is_htf ? "Context: Higher-Timeframe Trend Assessment" : "Context: Short-Term Tradeability"
+    sub_txt := sub_txt + "\n" + context_txt
+    
+    // Add Alignment Advice
+    if is_htf and not is_wait_good
+        sub_txt := sub_txt + "\nLower timeframes may still offer counter-trend opportunities"
+    if not is_htf and is_wait_good
+        sub_txt := sub_txt + "\nHigher timeframe trend should be checked for alignment"
+
+if not data_ok
+    sub_txt := "Insufficient historical data (Higher TF warm-up)"
 
 
 // Background
