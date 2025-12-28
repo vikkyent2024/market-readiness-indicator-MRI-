@@ -1,9 +1,9 @@
 //@version=5
 // Market Readiness Indicator [MRI]
 // Version: v1.1
-// Status: UX Enhancement (Dev)
+// Status: Locked / Stable Release
 // Date: 2025-12-28
-// Note: v1.0 logic preserved. Added Active Window Highlight + Stats Panel.
+// Note: v1.1 - Added Active Window Highlight. Stats Panel removed.
 indicator("Market Readiness Indicator [MRI]", shorttitle="MRI", overlay=true, max_boxes_count=50, max_lines_count=50, max_labels_count=50)
 
 // ==========================================
