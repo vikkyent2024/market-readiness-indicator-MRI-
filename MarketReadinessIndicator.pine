@@ -89,17 +89,16 @@ else
         state := 0 // NO EDGE
 
 // ==========================================
-// 5. TRANSITION RULES (HOLDING LOGIC)
+// 5. TRANSITION RULES & CONFIRMATION
 // ==========================================
-// Rule: Do NOT flip directly from LONG -> SHORT or SHORT -> LONG
+// Rule 1: Do NOT flip directly from LONG -> SHORT or SHORT -> LONG
 var int prev_major_state = 0 // Track last active trend (2 or -2)
 
-// If trying to flip trend directly
 if (state == 2 and prev_major_state == -2) or (state == -2 and prev_major_state == 2)
     state := 0 // Force NO EDGE transit
 
-// Graceful Degradation Logic
-// If we drop from a trend to NO EDGE directly, force WAIT instead
+// Rule 2: Graceful Degradation
+// If dropping from trend directly to NO EDGE, force WAIT
 if state == 0
     if state[1] == 2 or state[1] == -2
         state := 1
@@ -107,6 +106,15 @@ if state == 0
 // Update history
 if state == 2 or state == -2
     prev_major_state := state
+
+// Rule 3: 2-Bar Confirmation (Stability Patch)
+// A state change must persist for 2 bars to be accepted
+var int confirmed_state = 0
+
+// If current calculated state matches previous bar's calculated state, accept it
+// Otherwise, hold the old confirmed state
+if state == state[1]
+    confirmed_state := state
 
 // ==========================================
 // 6. VISUALIZATION
@@ -130,19 +138,20 @@ var string txt = "NO EDGE - Chop"
 var color col = c_chop
 var color bgc = c_bg_chop
 
-if state == 2
+// Use CONFIRMED state for output
+if confirmed_state == 2
     txt := "LONG – Trend Active"
     col := c_long
     bgc := c_bg_long
-else if state == -2
+else if confirmed_state == -2
     txt := "SHORT – Trend Active"
     col := c_short
     bgc := c_bg_short
-else if state == 1
+else if confirmed_state == 1
     txt := "WAIT – Pullback / Reset"
     col := c_wait
     bgc := c_bg_wait
-else if state == -9
+else if confirmed_state == -9
     txt := "AVOID – High Risk"
     col := c_avoid
     bgc := c_bg_avoid
@@ -167,4 +176,5 @@ if barstate.islast
 // ==========================================
 // 7. ALERTS
 // ==========================================
-alertcondition(state != state[1], title="State Changed", message="MRI State changed to {{plot_0}}")
+// Alert on confirmed state change only
+alertcondition(confirmed_state != confirmed_state[1], title="State Changed", message="MRI State changed to {{plot_0}}")
