@@ -1,7 +1,6 @@
 //@version=5
-// MER v2.0 - Final Cleanup (Timeframe Authority)
-// Philosophy: Contextual Radar. DECISION-ORIENTED.
-// Authority: Bias = Primary Timeframe. Execution = Chart Timeframe.
+// MER v2.0 - Final (Non-Repainting)
+// Contextual Radar. Decisions over Signals.
 indicator("Market Expansion Radar [MER]", shorttitle="MER", overlay=true, max_labels_count=50, max_lines_count=50)
 
 // ==========================================
@@ -23,7 +22,7 @@ bg_opacity = input.int(85, "Background Opacity", minval=0, maxval=100, group=gro
 // ==========================================
 // Encapsulated Bias Logic for Security Call
 calc_bias_components(len) =>
-    // A. Efficiency & Stability (Used for Extended check later)
+    // A. Efficiency & Stability
     er_len = 10
     change_abs = math.abs(close - close[er_len])
     vol_sum = math.sum(math.abs(high - low), er_len)
@@ -63,8 +62,8 @@ calc_bias_components(len) =>
 // ==========================================
 // 3. LOGIC: PRIMARY TIMEFRAME (BIAS)
 // ==========================================
-// Use request.security to get HTF values
-[htf_long_raw, htf_short_raw, htf_ma, htf_er] = request.security(syminfo.tickerid, tf_primary, calc_bias_components(200), lookahead=barmerge.lookahead_on)
+// CRITICAL: lookahead=barmerge.lookahead_off to prevent repainting
+[htf_long_raw, htf_short_raw, htf_ma, htf_er] = request.security(syminfo.tickerid, tf_primary, calc_bias_components(200), lookahead=barmerge.lookahead_off)
 
 // Determine Primary Bias
 string primary_bias_dir = "Neutral"
@@ -151,12 +150,10 @@ else
 // 6. VISUALS: BACKGROUND & LABELS
 // ==========================================
 // Background respects PRIMARY BIAS Only
-// Show Expanding (Teal/Orange) or Compression (Gray/Blue tint?)
-// Spec: "Teal shading when bias is Long... Orange when Short"
-// Only shade if NOT blocked? Spec: "Shading reflects PRIMARY bias only".
-// We will shade based on Primary Bias + Expanding State to keep it clean.
+// Show ONLY when State is Expanding AND Not Blocked
 color c_bg = na
-if not execution_blocked
+
+if exec_state == "Expanding" and not execution_blocked
     if primary_bias_dir == "Long"
         c_bg := color.new(color.teal, bg_opacity)
     else if primary_bias_dir == "Short"

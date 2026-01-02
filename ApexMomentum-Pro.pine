@@ -1,0 +1,200 @@
+//@version=5
+// ==============================================================================
+// 🚀 PROJECT: APEX MOMENTUM [PRO BUSINESS EDITION] - v30
+// ==============================================================================
+// 
+// 💡 THE "BUSINESS" LOGIC:
+//    - A 0.5% edge is useless if Commissions eat 0.4% of it.
+//    - This version subtracts your SPECIFIC Broker Fee from the profit.
+//    - If "Net Expectancy" is RED, you must increase Order Size ($) 
+//      or switch brokers.
+//
+// ==============================================================================
+
+indicator("Apex Momentum [PRO AI DASHBOARD]", overlay=true, shorttitle="Apex Pro", max_labels_count=500)
+
+// ==========================================
+// 1. BUSINESS SETTINGS (NEW)
+// ==========================================
+grp_biz   = "1. Business Logic (Commissions)"
+comm_val  = input.float(0.35, "Commission per Trade ($)", minval=0.0, step=0.01, group=grp_biz, tooltip="Enter your average IBKR fee (e.g., 0.35)")
+order_amt = input.float(1000, "Order Size ($)", minval=100, step=100, group=grp_biz, tooltip="How much capital you put in per trade.")
+
+// ==========================================
+// 2. STRATEGY MODES (LOCKED TO WIDE SCALP)
+// ==========================================
+// We defaulted to "Wide Scalp" since it had the best expectancy (0.49%)
+grp_mode  = "2. Risk Profile"
+strategy_mode = input.string("Wide Scalp (Volatile)", "Select Risk Profile", 
+     options=["Wide Scalp (Volatile)", "Balanced Scalp (Default)", "Sniper Scalp (Fast)"], 
+     group=grp_mode)
+
+// MANUAL OVERRIDE
+use_manual = input.bool(false, "🔴 Enable Manual Settings?", group=grp_mode)
+man_tp    = input.float(3.5, "Manual Take Profit %", step=0.1, group=grp_mode) / 100
+man_sl    = input.float(3.0, "Manual Stop Loss %", step=0.1, group=grp_mode) / 100
+man_trail = input.float(2.5, "Manual Trailing Stop %", step=0.1, group=grp_mode) / 100
+man_buy   = input.int(60, "Manual Buy Trigger", group=grp_mode)
+
+// ==========================================
+// 3. LOGIC ENGINE
+// ==========================================
+
+// Mapping Modes
+var float auto_tp = 0.035
+var float auto_sl = 0.030
+var float auto_trail = 0.025
+var int auto_buy = 60
+
+if strategy_mode == "Balanced Scalp (Default)"
+    auto_tp    := 0.025
+    auto_sl    := 0.020
+    auto_trail := 0.015
+    auto_buy   := 60
+else if strategy_mode == "Wide Scalp (Volatile)"
+    auto_tp    := 0.035
+    auto_sl    := 0.030
+    auto_trail := 0.025
+    auto_buy   := 60
+else if strategy_mode == "Sniper Scalp (Fast)"
+    auto_tp    := 0.015
+    auto_sl    := 0.015
+    auto_trail := 0.010
+    auto_buy   := 20
+
+// Apply Selection
+final_tp    = use_manual ? man_tp : auto_tp
+final_sl    = use_manual ? man_sl : auto_sl
+final_trail = use_manual ? man_trail : auto_trail
+final_buy   = use_manual ? man_buy : auto_buy
+
+// Indicator Settings
+grp_vis   = "3. Visuals"
+show_dash = input.bool(true, "Show Dashboard?", group=grp_vis)
+theme_col = input.color(color.blue, "Theme Color", group=grp_vis)
+ema_len   = 50
+stoch_len = 14
+
+// Calculations
+ema_cloud = ta.ema(close, ema_len)
+trend_up  = close > ema_cloud
+rsi1 = ta.rsi(close, stoch_len)
+k = ta.sma(ta.stoch(rsi1, rsi1, rsi1, stoch_len), 3)
+d = ta.sma(k, 3)
+
+// SIGNALS
+buy_signal = trend_up and ta.crossover(k, d) and k < final_buy
+
+// ==========================================
+// 4. TRADE SIMULATOR (NET PROFIT CALC)
+// ==========================================
+var bool in_trade = false
+var float entry_price = 0.0
+var float active_stop_level = 0.0 
+
+// Stats Accumulators
+var int cnt_wins = 0
+var int cnt_loss = 0
+var float sum_win_pct = 0.0
+var float sum_loss_pct = 0.0
+
+plot_buy  = false
+plot_win  = false 
+plot_loss = false
+
+// --- EXECUTION LOGIC ---
+if in_trade
+    // Check Hard Stop Loss
+    if low <= active_stop_level
+        in_trade := false
+        cnt_loss += 1
+        float loss_p = (entry_price - active_stop_level) / entry_price * 100
+        sum_loss_pct += loss_p 
+        plot_loss := true
+    
+    // Check Take Profit
+    else if high >= entry_price * (1 + final_tp)
+        in_trade := false
+        cnt_wins += 1
+        sum_win_pct += final_tp * 100
+        plot_win := true
+    
+    // Update Trailing Stop
+    else
+        float new_trail = high * (1 - final_trail)
+        if new_trail > active_stop_level
+            active_stop_level := new_trail
+
+// Check Entries
+if buy_signal and not in_trade
+    in_trade := true
+    entry_price := close
+    active_stop_level := close * (1 - final_sl)
+    plot_buy := true
+
+// --- GROSS STATISTICS (BEFORE FEES) ---
+total_trades = cnt_wins + cnt_loss
+win_rate = total_trades > 0 ? (cnt_wins / total_trades) * 100 : 0
+avg_win_pct  = cnt_wins > 0 ? sum_win_pct / cnt_wins : 0
+avg_loss_pct = cnt_loss > 0 ? sum_loss_pct / cnt_loss : 0
+gross_expectancy_pct = ( (win_rate/100) * avg_win_pct ) - ( ((100-win_rate)/100) * avg_loss_pct )
+
+// --- NET STATISTICS (AFTER FEES) ---
+// 1. Convert % Expectancy to $ Gross Profit
+gross_profit_dollar = order_amt * (gross_expectancy_pct / 100)
+
+// 2. Subtract Commission
+net_profit_dollar = gross_profit_dollar - comm_val
+
+// 3. Convert back to Net Expectancy %
+net_expectancy_pct = (net_profit_dollar / order_amt) * 100
+
+// ==========================================
+// 5. VISUALS
+// ==========================================
+cloud_color = close > ema_cloud ? color.green : color.red
+plot(ema_cloud, color=cloud_color, linewidth=3, title="Trend Cloud")
+
+if plot_buy
+    label.new(bar_index, low, text="BUY\n" + str.tostring(close, format.mintick), color=color.green, style=label.style_label_up, textcolor=color.white, size=size.small)
+if plot_win
+    label.new(bar_index, high, text="WIN\n" + str.tostring(close, format.mintick), color=theme_col, style=label.style_label_down, textcolor=color.white, size=size.small)
+if plot_loss
+    label.new(bar_index, high, text="SELL\n" + str.tostring(close, format.mintick), color=color.red, style=label.style_label_down, textcolor=color.white, size=size.small)
+
+// BUSINESS DASHBOARD
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 10), border_width=1)
+if show_dash and barstate.islast
+    table.cell(dash, 0, 0, "APEX BIZ", text_color=color.white, bgcolor=theme_col, text_size=size.normal)
+    table.cell(dash, 1, 0, "v30", text_color=color.green, bgcolor=theme_col, text_size=size.normal)
+    
+    // Row 1: Order Size Context
+    table.cell(dash, 0, 1, "Capital:", text_color=color.silver, text_size=size.normal)
+    table.cell(dash, 1, 1, "$" + str.tostring(order_amt), text_color=color.white, text_size=size.normal)
+    
+    // Row 2: Comm Fee
+    table.cell(dash, 0, 2, "Comm Fee:", text_color=color.silver, text_size=size.normal)
+    table.cell(dash, 1, 2, "-$" + str.tostring(comm_val), text_color=color.red, text_size=size.normal)
+    
+    // Row 3: Win Rate
+    table.cell(dash, 0, 3, "Win Rate:", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 3, str.tostring(win_rate, "#.#") + "%", text_color=win_rate > 30 ? color.green : color.orange, text_size=size.normal)
+    
+    // Row 4: Gross Expectancy (Algo Performance)
+    table.cell(dash, 0, 4, "Gross Exp:", text_color=color.gray, text_size=size.normal)
+    table.cell(dash, 1, 4, str.tostring(gross_expectancy_pct, "#.##") + "%", text_color=color.gray, text_size=size.normal)
+
+    // Row 5: SEPARATOR
+    table.cell(dash, 0, 5, "---", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, "---", text_color=color.gray, text_size=size.small)
+
+    // Row 6: NET PROFIT PER TRADE ($)
+    table.cell(dash, 0, 6, "Net PnL/$:", text_color=color.white, text_size=size.normal)
+    pnl_col = net_profit_dollar > 0 ? color.lime : color.red
+    table.cell(dash, 1, 6, "$" + str.tostring(net_profit_dollar, "#.##"), text_color=pnl_col, text_size=size.large)
+
+    // Row 7: STATUS
+    status_txt = net_profit_dollar > 0 ? "VIABLE" : "INCREASE $$"
+    status_col = net_profit_dollar > 0 ? color.green : color.red
+    table.cell(dash, 0, 7, "Status:", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 7, status_txt, text_color=status_col, text_size=size.normal)

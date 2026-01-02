@@ -1,0 +1,518 @@
+//@version=5
+// MRI + MER Combined Suite (Full Features)
+// Combined by AI Assistant
+// Date: 2025-12-28
+indicator("MRI + MER Suite", shorttitle="MRI+MER", overlay=true, max_boxes_count=50, max_lines_count=50, max_labels_count=50)
+
+// ==========================================
+// 1. INPUTS
+// ==========================================
+
+// --- MRI Inputs ---
+group_mri_vis = "[MRI] Visuals"
+group_mri_trig = "[MRI] Triggers"
+group_mri_risk = "[MRI] Risk"
+
+mri_show_bg = input.bool(true, "Show Background Tint", group=group_mri_vis)
+mri_show_liquidity = input.bool(true, "Show Institutional S/R Lines", group=group_mri_vis)
+mri_enable_pullback = input.bool(true, "Enable Pullback Triggers", group=group_mri_trig)
+mri_enable_ema = input.bool(true, "Trigger: EMA Reclaim", group=group_mri_trig)
+mri_enable_struct = input.bool(true, "Trigger: Structure Break", group=group_mri_trig)
+mri_strict_gating = input.bool(true, "Enable Strict Pullback Gating", group=group_mri_risk)
+
+// --- MER Inputs ---
+group_mer_auth = "[MER] Timeframe Authority"
+group_mer_vis  = "[MER] Visuals"
+
+mer_tf_primary = input.timeframe("D", "Primary Timeframe", group=group_mer_auth)
+mer_lookback = input.int(200, "Stats Lookback", group=group_mer_auth)
+mer_show_panel = input.bool(true, "Show Context Panel", group=group_mer_vis)
+mer_show_highlight = input.bool(true, "Show Expansion Highlight", group=group_mer_vis)
+mer_show_markers = input.bool(true, "Show Event Markers", group=group_mer_vis)
+mer_bg_opacity = input.int(85, "Background Opacity", minval=0, maxval=100, group=group_mer_vis)
+
+
+// ==========================================
+// 2. HELPER FUNCTIONS
+// ==========================================
+
+// [MER] Bias Logic
+mer_calc_bias(len) =>
+    er_len = 10
+    c_abs = math.abs(close - close[er_len])
+    v_sum = math.sum(math.abs(high - low), er_len)
+    er = v_sum != 0 ? c_abs / v_sum : 0
+    
+    ma200 = ta.ema(close, len)
+    score_l = 0.0
+    if close > ma200 
+        score_l += 25
+    if ma200 > ma200[5]
+        score_l += 25
+        
+    score_s = 0.0
+    if close < ma200
+        score_s += 25
+    if ma200 < ma200[5]
+        score_s += 25
+        
+    v_delta = math.sum(volume * (close >= open ? 1 : -1), 20)
+    part_l = v_delta > 0 ? 30 : 0
+    part_s = v_delta < 0 ? 30 : 0
+    
+    ma_htf = ta.ema(close, len * 3)
+    htf_l = close > ma_htf ? 20 : 0
+    htf_s = close < ma_htf ? 20 : 0
+    
+    b_l = math.min(score_l + part_l + htf_l, 95)
+    b_s = math.min(score_s + part_s + htf_s, 95)
+    
+    [b_l, b_s]
+
+// ==========================================
+// 3. MRI LOGIC
+// ==========================================
+
+// A. Direction
+mri_base = ta.ema(close, 50)
+mri_slope = (mri_base - mri_base[5]) / mri_base[5]
+mri_bull = close > mri_base and mri_slope > 0
+mri_bear = close < mri_base and mri_slope < 0
+
+// B. Quality
+mri_er_len = 14
+mri_chg = math.abs(close - close[mri_er_len])
+mri_vol = math.sum(math.abs(close - close[1]), mri_er_len)
+mri_er = mri_vol != 0 ? mri_chg / mri_vol : 0
+mri_qual = mri_er >= 0.30
+
+// C. Extension
+mri_sd = ta.stdev(close, 50)
+mri_up_dev = mri_base + (2.2 * mri_sd)
+mri_dn_dev = mri_base - (2.2 * mri_sd)
+mri_ext_l = close > mri_up_dev
+mri_ext_s = close < mri_dn_dev
+
+// D. Volatility Risk
+mri_atr = ta.atr(14)
+mri_atr_avg = ta.sma(mri_atr, 50)
+mri_spike = mri_atr > (mri_atr_avg * 2.5)
+
+// Decision Engine
+int mri_state = 0
+if mri_spike
+    mri_state := -9
+else
+    if mri_bull
+        if mri_qual and not mri_ext_l
+            mri_state := 2
+        else
+            mri_state := 1
+    else if mri_bear
+        if mri_qual and not mri_ext_s
+            mri_state := -2
+        else
+            mri_state := 1
+    else
+        mri_state := 0
+
+// Transitions
+var int mri_prev_major = 0
+if (mri_state == 2 and mri_prev_major == -2) or (mri_state == -2 and mri_prev_major == 2)
+    mri_state := 0
+
+if mri_state == 0
+    if mri_state[1] == 2 or mri_state[1] == -2
+        mri_state := 1
+
+if mri_state == 2 or mri_state == -2
+    mri_prev_major := mri_state
+
+var int mri_conf_state = 0
+if mri_state == mri_state[1]
+    mri_conf_state := mri_state
+
+// Wait Quality
+float mri_pb_score = 0.0
+float mri_depth = 0.0
+if mri_bull
+    mri_depth := (mri_base - close) / mri_atr
+else if mri_bear
+    mri_depth := (close - mri_base) / mri_atr
+mri_depth := math.max(0, mri_depth)
+
+float s_depth = mri_depth <= 0.8 ? 40 : (mri_depth <= 1.5 ? 20 : 0)
+float vol_rat = mri_atr / mri_atr_avg
+float s_vol = vol_rat <= 1.2 ? 30 : (vol_rat <= 1.6 ? 15 : 0)
+float s_er = mri_er >= 0.25 ? 30 : (mri_er >= 0.18 ? 15 : 0)
+
+mri_pb_score := s_depth + s_vol + s_er
+bool mri_wait_good = mri_pb_score >= 60
+
+// Triggers
+var bool mri_used = false
+if mri_conf_state == 2 or mri_conf_state == -2
+    mri_used := false
+
+bool mri_act = false
+if mri_strict_gating
+    if mri_conf_state == 1 and mri_wait_good
+        if not mri_used
+            mri_act := true
+            mri_used := true
+else
+    mri_act := true
+
+// ==========================================
+// 4. MRI INSTITUTIONAL LIQUIDITY (FULL)
+// ==========================================
+// Ported from v1.1
+type MriZone
+    float price
+    float top
+    float bot
+    int count
+    int last_bar
+    bool is_sup
+
+var mri_zone_arr = array.new<MriZone>(0)
+
+mri_f_len = 2
+mri_z_clust = 0.75
+mri_z_h_min = 0.5
+mri_z_inv   = 1.0
+mri_vis_dst = 6.0
+
+mri_ph = ta.pivothigh(high, mri_f_len, mri_f_len)
+mri_pl = ta.pivotlow(low, mri_f_len, mri_f_len)
+
+// Function to check reaction or create new
+mri_update_zones(float pivot, bool is_s, float atr_val) =>
+    bool found = false
+    if array.size(mri_zone_arr) > 0
+        for i = 0 to array.size(mri_zone_arr) - 1
+            MriZone z = array.get(mri_zone_arr, i)
+            if z.is_sup == is_s
+                if math.abs(pivot - z.price) <= (atr_val * mri_z_clust)
+                    if (bar_index - z.last_bar) >= mri_f_len
+                        z.count += 1
+                        z.last_bar := bar_index
+                        z.top := math.max(z.top, pivot)
+                        z.bot := math.min(z.bot, pivot)
+                        float mid = (z.top + z.bot) / 2
+                        float min_h = atr_val * mri_z_h_min
+                        if (z.top - z.bot) < min_h
+                            z.top := mid + min_h/2
+                            z.bot := mid - min_h/2
+                        found := true
+                        break
+    if not found
+        float t_new = pivot
+        float b_new = pivot
+        float mh = atr_val * mri_z_h_min
+        t_new := pivot + mh/2
+        b_new := pivot - mh/2
+        array.push(mri_zone_arr, MriZone.new(pivot, t_new, b_new, 1, bar_index, is_s))
+
+if not na(mri_ph)
+    mri_update_zones(mri_ph, false, mri_atr)
+if not na(mri_pl)
+    mri_update_zones(mri_pl, true, mri_atr)
+
+// Invalidation
+if array.size(mri_zone_arr) > 0
+    for i = array.size(mri_zone_arr) - 1 to 0
+        MriZone z = array.get(mri_zone_arr, i)
+        bool kill = false
+        float thresh = mri_atr * mri_z_inv
+        if z.is_sup
+            if close < (z.bot - thresh) 
+                kill := true
+        else
+            if close > (z.top + thresh)
+                kill := true
+        if kill
+            array.remove(mri_zone_arr, i)
+
+// Visualization (Detailed Labels)
+type MriZDist
+    int index
+    float dist
+
+var line mri_vis_sup_line = na
+var line mri_vis_res_line = na
+var label mri_vis_sup_lbl = na
+var label mri_vis_res_lbl = na
+
+if barstate.islast
+    line.delete(mri_vis_sup_line)
+    line.delete(mri_vis_res_line)
+    label.delete(mri_vis_sup_lbl)
+    label.delete(mri_vis_res_lbl)
+    
+    var mri_dist_sup = array.new<MriZDist>(0)
+    var mri_dist_res = array.new<MriZDist>(0)
+    array.clear(mri_dist_sup)
+    array.clear(mri_dist_res)
+    
+    if array.size(mri_zone_arr) > 0
+        float lim = mri_atr * mri_vis_dst
+        for i = 0 to array.size(mri_zone_arr) - 1
+            MriZone z = array.get(mri_zone_arr, i)
+            if z.count >= 3
+                float ads = math.abs(close - z.price)
+                if ads <= lim
+                    if z.is_sup
+                        if close > z.bot
+                            array.push(mri_dist_sup, MriZDist.new(i, ads))
+                    else
+                        if close < z.top
+                            array.push(mri_dist_res, MriZDist.new(i, ads))
+                            
+    // Find winners
+    int b_sup_idx = -1
+    float min_sup = 9999999.9
+    if array.size(mri_dist_sup) > 0
+        for k = 0 to array.size(mri_dist_sup) - 1
+            MriZDist it = array.get(mri_dist_sup, k)
+            if it.dist < min_sup
+                min_sup := it.dist
+                b_sup_idx := k
+                
+    int b_res_idx = -1
+    float min_res = 9999999.9
+    if array.size(mri_dist_res) > 0
+        for k = 0 to array.size(mri_dist_res) - 1
+            MriZDist it = array.get(mri_dist_res, k)
+            if it.dist < min_res
+                min_res := it.dist
+                b_res_idx := k
+    
+    // Draw
+    bool mri_active = mri_conf_state == 2 or mri_conf_state == -2 or (mri_conf_state == 1 and mri_wait_good)
+    
+    if mri_show_liquidity and mri_active
+        if b_sup_idx != -1
+            MriZone z = array.get(mri_zone_arr, array.get(mri_dist_sup, b_sup_idx).index)
+            float ds_pct = (close - z.price)/z.price * 100
+            
+            string st = ""
+            color sc = color.green
+            string ss = line.style_solid
+            
+            if ds_pct >= 0.3
+                st := "Holding Above Support"
+                sc := color.green
+                ss := line.style_solid
+            else if math.abs(ds_pct) < 0.3
+                st := "Support Under Test\nReclaim Required"
+                sc := color.orange
+                ss := line.style_dashed
+            else
+                st := "Support Broken"
+                sc := color.gray
+                ss := line.style_dashed
+                
+            mri_vis_sup_line := line.new(bar_index-5, z.price, bar_index+25, z.price, color=color.new(sc,0), width=2, style=ss)
+            string t = "Institutional Demand (Support)\n@ " + str.tostring(z.price, "#.##") + "\n" + str.tostring(math.abs(ds_pct), "#.#") + "% " + (z.price<close?"Below":"Above") + "\n" + st
+            mri_vis_sup_lbl := label.new(bar_index+25, z.price, text=t, style=label.style_label_left, color=color.new(sc,20), textcolor=color.white)
+            
+        if b_res_idx != -1
+            MriZone z = array.get(mri_zone_arr, array.get(mri_dist_res, b_res_idx).index)
+            float dr_pct = (z.price - close)/close * 100 // Rev
+            mri_vis_res_line := line.new(bar_index-5, z.price, bar_index+25, z.price, color=color.new(color.red,0), width=2, style=line.style_solid)
+            string t = "Institutional Supply (Resistance)\n@ " + str.tostring(z.price, "#.##") + "\n" + str.tostring(math.abs(dr_pct), "#.#") + "% " + (z.price>close?"Above":"Below") + "\nActive Overhead Supply"
+            mri_vis_res_lbl := label.new(bar_index+25, z.price, text=t, style=label.style_label_left, color=color.new(color.red,20), textcolor=color.white)
+
+// ==========================================
+// 5. MER LOGIC (v2 Timeframe Authority)
+// ==========================================
+
+// Primary Bias
+[mer_htf_l, mer_htf_s] = request.security(syminfo.tickerid, mer_tf_primary, mer_calc_bias(200), lookahead=barmerge.lookahead_off)
+
+string mer_bias_dir = "Neutral"
+float mer_bias_sc = 0.0
+
+if mer_htf_l > mer_htf_s
+    mer_bias_dir := "Long"
+    mer_bias_sc := mer_htf_l
+else if mer_htf_s > mer_htf_l
+    mer_bias_dir := "Short"
+    mer_bias_sc := mer_htf_s
+else
+    mer_bias_sc := math.max(mer_htf_l, mer_htf_s)
+
+// Execution
+mer_atr = ta.atr(14)
+mer_atr_sma = ta.sma(mer_atr, 50)
+[mer_bb_m, mer_bb_u, mer_bb_l] = ta.bb(close, 20, 2.0)
+mer_bb_w = mer_bb_m != 0 ? (mer_bb_u - mer_bb_l) / mer_bb_m : 0
+mer_bb_w_sma = ta.sma(mer_bb_w, 50)
+
+mer_is_atr_low = mer_atr < (mer_atr_sma * 0.8)
+mer_is_bb_sqz = mer_bb_w < (mer_bb_w_sma * 0.8)
+mer_atr_rat = mer_atr_sma != 0 ? mer_atr / mer_atr_sma : 1.0
+
+mer_ext = mer_atr_rat > 1.6
+mer_comp = mer_is_atr_low or mer_is_bb_sqz
+
+string mer_state = "Expanding"
+if mer_ext
+    mer_state := "Extended"
+else if mer_comp
+    mer_state := "Compression"
+
+// Action Hint
+mer_ma200 = ta.ema(close, 200)
+mer_uptrend = close > mer_ma200
+mer_downtrend = close < mer_ma200
+
+string mer_hint = "Wait"
+bool mer_blocked = false
+
+if mer_bias_dir == "Long"
+    if mer_uptrend
+        if mer_state == "Compression"
+            mer_hint := "Prepare Long"
+        else if mer_state == "Expanding"
+            mer_hint := "Hold / Trail"
+        else
+            mer_hint := "Take Profit"
+    else
+        mer_hint := "Blocked (Pullback)"
+        mer_blocked := true
+else if mer_bias_dir == "Short"
+    if mer_downtrend
+        if mer_state == "Compression"
+            mer_hint := "Prepare Short"
+        else if mer_state == "Expanding"
+            mer_hint := "Hold / Trail"
+        else
+            mer_hint := "Take Profit"
+    else
+        mer_hint := "Blocked (Pullback)"
+        mer_blocked := true
+else
+    mer_hint := "No Bias"
+
+// ==========================================
+// 6. VISUALIZATION (PANELS & BG)
+// ==========================================
+
+// --- MRI Visuals ---
+color c_mri_bg = na
+if mri_conf_state == 2
+    c_mri_bg := color.new(#4caf50, 92)
+else if mri_conf_state == -2
+    c_mri_bg := color.new(#ef5350, 92)
+else if mri_conf_state == 1
+    c_mri_bg := mri_wait_good ? color.new(#81c784, 85) : color.new(#ff9800, 92)
+else if mri_conf_state == -9
+    c_mri_bg := color.new(#7e57c2, 90)
+else
+    c_mri_bg := color.new(#9e9e9e, 94)
+
+if mri_wait_good 
+    c_mri_bg := color.new(color.green, 92)
+
+bgcolor(mri_show_bg ? c_mri_bg : na, title="MRI Background")
+
+// --- MRI TRIGGERS (Ported) ---
+bool trig_ema = false
+bool trig_struct = false
+ema21 = ta.ema(close, 21)
+high_5 = ta.highest(high, 5)[1]
+low_5 = ta.lowest(low, 5)[1]
+if mri_enable_pullback and mri_conf_state == 1 and mri_wait_good
+    if mri_enable_ema
+        if mri_bull and ta.crossover(close, ema21)
+            trig_ema := true
+        if mri_bear and ta.crossunder(close, ema21)
+            trig_ema := true
+    if mri_enable_struct
+        if mri_bull and close > high_5
+            trig_struct := true
+        if mri_bear and close < low_5
+            trig_struct := true
+
+// --- MRI Panel (Full v1.1 Detail) ---
+// Reconstruction of text logic
+string m_txt = "NO EDGE - Chop"
+color m_col = color.new(#9e9e9e, 0)
+string m_sub = ""
+
+if mri_conf_state == 2
+    m_txt := "MRI: LONG – Trend Active"
+    m_col := color.new(#4caf50, 0)
+    m_sub := "This indicator defines when to trade, not how to enter."
+else if mri_conf_state == -2
+    m_txt := "MRI: SHORT – Trend Active"
+    m_col := color.new(#ef5350, 0)
+    m_sub := "This indicator defines when to trade, not how to enter."
+else if mri_conf_state == 1
+    if mri_wait_good
+        m_txt := "MRI: WAIT – Good"
+        m_col := color.new(#ff9800, 0)
+        m_sub := "PullbackScore: " + str.tostring(mri_pb_score, "#") + "/100"
+        if mri_strict_gating
+            m_sub := m_sub + (mri_act ? " (ACTIONABLE)" : " (COOLDOWN)")
+        else
+            m_sub := m_sub + " (Trend & Volatility Stable)\nCheck Support/Resistance"
+        if trig_ema
+            m_sub := m_sub + "\nTrigger: EMA Reclaim"
+        if trig_struct
+            m_sub := m_sub + "\nTrigger: Structure Break"
+    else
+        m_txt := "MRI: WAIT – Unstable"
+        m_col := color.new(#ff9800, 0)
+        m_sub := "PullbackScore: " + str.tostring(mri_pb_score, "#") + "/100 (High Vol/Weak Trend)"
+
+else if mri_conf_state == -9
+    m_txt := "MRI: AVOID"
+    m_col := color.new(#7e57c2, 0)
+    m_sub := "High Risk Volatility"
+else
+    m_txt := "MRI: NO EDGE"
+    m_col := color.new(#9e9e9e, 0)
+    m_sub := "Chop / No Bias"
+
+// Check HTF
+bool is_htf = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1W")
+if mri_conf_state == 1
+    string ctxt = is_htf ? "Context: HTF Trend" : "Context: ST Trade"
+    m_sub := m_sub + "\n" + ctxt
+
+var table mri_pnl = table.new(position.top_right, 1, 2, border_width=0)
+if barstate.islast
+    table.cell(mri_pnl, 0, 0, m_txt, bgcolor=m_col, text_color=color.white, text_size=size.small, width=16)
+    table.cell(mri_pnl, 0, 1, m_sub, bgcolor=color.new(color.white, 90), text_color=color.gray, text_size=size.tiny)
+
+
+// --- MER Visuals ---
+// Background
+color mer_bg = na
+if mer_state == "Expanding" and not mer_blocked
+    if mer_bias_dir == "Long"
+        mer_bg := color.new(color.teal, mer_bg_opacity)
+    else if mer_bias_dir == "Short"
+        mer_bg := color.new(color.orange, mer_bg_opacity)
+
+bgcolor(mer_show_highlight ? mer_bg : na, title="MER Background")
+
+// Markers
+bool mer_chg = mer_state != mer_state[1]
+if mer_show_markers and mer_chg
+    label.new(bar_index, high, text=mer_state, style=label.style_none, textcolor=color.gray, size=size.small)
+
+// --- MER Panel (Bottom Right) ---
+var table mer_pnl = table.new(position.bottom_right, 1, 5, border_width=0, frame_color=color.gray, frame_width=1)
+if barstate.islast and mer_show_panel
+    color c_b = mer_bias_dir == "Long" ? color.green : (mer_bias_dir == "Short" ? color.red : color.gray)
+    color c_h = mer_blocked ? color.orange : color.blue
+
+    table.cell(mer_pnl, 0, 0, "MER v2 (Auth)", bgcolor=color.new(color.gray, 90), text_size=size.normal)
+    table.cell(mer_pnl, 0, 1, "Bias: " + mer_bias_dir + " (" + str.tostring(mer_bias_sc, "#") + "%)", text_color=c_b, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    table.cell(mer_pnl, 0, 2, "State: " + mer_state, text_color=color.black, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    table.cell(mer_pnl, 0, 3, "Action: " + mer_hint, text_color=c_h, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)
+    table.cell(mer_pnl, 0, 4, "Struct: " + (mer_uptrend ? "Up" : "Down"), text_color=color.gray, bgcolor=color.new(color.white, 95), text_size=size.small, text_halign=text.align_left)

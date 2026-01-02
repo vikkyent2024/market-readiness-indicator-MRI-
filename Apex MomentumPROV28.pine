@@ -1,0 +1,208 @@
+//@version=5 
+indicator("Apex Momentum [PRO AI DASHBOARD]", overlay=true, shorttitle="Apex Pro", max_labels_count=500)
+
+// v28 ==========================================
+// 1. VISUALS & DASHBOARD
+// ==========================================
+grp_vis   = "1. Visuals"
+show_dash = input.bool(true, "Show Dashboard?", group=grp_vis)
+theme_col = input.color(color.blue, "Theme Color", group=grp_vis)
+
+// ==========================================
+// 2. STRATEGY MODES (RISK PROFILES)
+// ==========================================
+// NOTE: These are RISK PROFILES, not different strategies. 
+// They simply adjust how tight the stop loss and entry filters are.
+grp_mode  = "2. Risk Profile (Strategy Mode)"
+strategy_mode = input.string("Balanced Trend (Default)", "Select Risk Profile", 
+     options=["Balanced Trend (Default)", "Wide Swing (Volatile)", "Sniper Scalp (Fast)"], 
+     group=grp_mode, tooltip="Balanced: Standard Risk.\nWide Swing: Looser Stops for Chop.\nSniper: Strict Entry + Fast Exit.")
+
+// MANUAL OVERRIDE
+use_manual = input.bool(false, "🔴 Enable Manual Settings?", group=grp_mode)
+man_sl    = input.float(2.0, "Manual Stop Loss %", step=0.1, group=grp_mode) / 100
+man_trail = input.float(2.0, "Manual Trailing Stop %", step=0.1, group=grp_mode) / 100
+man_buy   = input.int(20, "Manual Buy Trigger", group=grp_mode)
+
+// ==========================================
+// 3. LOGIC ENGINE
+// ==========================================
+
+// Mapping Modes to Math
+var float auto_sl = 0.04
+var float auto_trail = 0.03
+var int auto_buy = 60
+
+if strategy_mode == "Balanced Trend (Default)"
+    auto_sl    := 0.04
+    auto_trail := 0.03
+    auto_buy   := 60
+else if strategy_mode == "Wide Swing (Volatile)"
+    auto_sl    := 0.05
+    auto_trail := 0.05
+    auto_buy   := 60
+else if strategy_mode == "Sniper Scalp (Fast)"
+    auto_sl    := 0.06
+    auto_trail := 0.02
+    auto_buy   := 20
+
+// Apply Selection
+final_sl    = use_manual ? man_sl : auto_sl
+final_trail = use_manual ? man_trail : auto_trail
+final_buy   = use_manual ? man_buy : auto_buy
+
+// Indicator Settings
+grp_eng   = "3. Engine Settings"
+ema_len   = input.int(50, "Trend Cloud Length", group=grp_eng)
+stoch_len = input.int(14, "Momentum Length", group=grp_eng)
+tp_perc   = input.float(6.0, "Take Profit Target %", group=grp_eng) / 100
+
+// Calculations
+ema_cloud = ta.ema(close, ema_len)
+trend_up  = close > ema_cloud
+rsi1 = ta.rsi(close, stoch_len)
+k = ta.sma(ta.stoch(rsi1, rsi1, rsi1, stoch_len), 3)
+d = ta.sma(k, 3)
+
+// SIGNALS
+buy_signal = trend_up and ta.crossover(k, d) and k < final_buy
+
+// ==========================================
+// 4. TRADE SIMULATOR (STRICT ACCOUNTING)
+// ==========================================
+// State Variables
+var bool in_trade = false
+var float entry_price = 0.0
+var float active_stop_level = 0.0 // The actual price where we will exit
+
+// Stats Accumulators
+var int cnt_wins = 0
+var int cnt_loss = 0
+var float sum_win_pct = 0.0
+var float sum_loss_pct = 0.0
+
+plot_buy  = false
+plot_win  = false 
+plot_loss = false
+
+// --- EXECUTION LOGIC ---
+
+// 1. Check Exits (Using PREVIOUS Bar's Stop Level)
+// We check exits BEFORE updating the stop to prevent look-ahead bias
+if in_trade
+    // A. Check Hard Stop Loss (Fixed % from Entry)
+    // OR B. Check Trailing Stop (Dynamic Level)
+    // We treat the "active_stop_level" as the floor.
+    if low <= active_stop_level
+        in_trade := false
+        cnt_loss += 1
+        // Calculate Loss %
+        // We assume we slipped and sold AT the stop level
+        float loss_p = (entry_price - active_stop_level) / entry_price * 100
+        sum_loss_pct += loss_p 
+        plot_loss := true
+    
+    // C. Check Take Profit (Fixed Target)
+    else if high >= entry_price * (1 + tp_perc)
+        in_trade := false
+        cnt_wins += 1
+        sum_win_pct += tp_perc * 100
+        plot_win := true
+    
+    // D. Update Trailing Stop (For the NEXT Bar)
+    else
+        // Calculate where the trail WOULD be based on current high
+        float new_trail = high * (1 - final_trail)
+        // Only move the stop UP, never down
+        if new_trail > active_stop_level
+            active_stop_level := new_trail
+
+// 2. Check Entries
+if buy_signal and not in_trade
+    in_trade := true
+    entry_price := close
+    // Initialize Stop at the Hard SL level
+    active_stop_level := close * (1 - final_sl)
+    plot_buy := true
+
+// --- STATISTICS ---
+total_trades = cnt_wins + cnt_loss
+win_rate = total_trades > 0 ? (cnt_wins / total_trades) * 100 : 0
+avg_win  = cnt_wins > 0 ? sum_win_pct / cnt_wins : 0
+avg_loss = cnt_loss > 0 ? sum_loss_pct / cnt_loss : 0
+
+// Expectancy Formula: (Win% x AvgWin) - (Loss% x AvgLoss)
+// Result is the expected return per trade in %
+expectancy = ( (win_rate/100) * avg_win ) - ( ((100-win_rate)/100) * avg_loss )
+
+// ==========================================
+// 5. ATR VOLATILITY HINT (AI LABEL)
+// ==========================================
+// Measures if volatility is expanding (Wild) or contracting (Calm)
+atr_val = ta.atr(14)
+atr_avg = ta.sma(atr_val, 20)
+is_volatile = atr_val > (atr_avg * 1.1)
+
+rec_text = is_volatile ? "SNIPER" : "BALANCED"
+rec_color = is_volatile ? color.orange : color.aqua
+
+// ==========================================
+// 6. VISUALS
+// ==========================================
+// Dynamic Cloud: Green if Price > Cloud, Red if Price < Cloud
+cloud_color = close > ema_cloud ? color.green : color.red
+plot(ema_cloud, color=cloud_color, linewidth=3, title="Trend Cloud")
+
+// Labels
+if plot_buy
+    label.new(bar_index, low, text="BUY\n" + str.tostring(close, format.mintick), color=color.green, style=label.style_label_up, textcolor=color.white, size=size.small)
+if plot_win
+    label.new(bar_index, high, text="WIN\n" + str.tostring(close, format.mintick), color=theme_col, style=label.style_label_down, textcolor=color.white, size=size.small)
+if plot_loss
+    label.new(bar_index, high, text="SELL\n" + str.tostring(close, format.mintick), color=color.red, style=label.style_label_down, textcolor=color.white, size=size.small)
+
+// EXTENDED DASHBOARD
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 10), border_width=1)
+if show_dash and barstate.islast
+    // Header
+    table.cell(dash, 0, 0, "APEX PRO", text_color=color.white, bgcolor=theme_col, text_size=size.normal)
+    table.cell(dash, 1, 0, "v28 ENG", text_color=color.green, bgcolor=theme_col, text_size=size.normal)
+    
+    // Mode
+    table.cell(dash, 0, 1, "Mode:", text_color=color.white, text_size=size.normal)
+    style_name = "BALANCED"
+    if use_manual
+        style_name := "MANUAL"
+    else if strategy_mode == "Wide Swing (Volatile)"
+        style_name := "SWING"
+    else if strategy_mode == "Sniper Scalp (Fast)"
+        style_name := "SNIPER"
+    table.cell(dash, 1, 1, style_name, text_color=color.yellow, text_size=size.normal)
+    
+    // Volatility Hint
+    table.cell(dash, 0, 2, "Vol. Hint:", text_color=color.silver, text_size=size.normal)
+    table.cell(dash, 1, 2, rec_text, text_color=rec_color, text_size=size.normal)
+    
+    // Win Rate
+    table.cell(dash, 0, 3, "Win Rate:", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 3, str.tostring(win_rate, "#.#") + "%", text_color=win_rate > 50 ? color.green : color.red, text_size=size.normal)
+    
+    // Total Trades
+    table.cell(dash, 0, 4, "Trades:", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 4, str.tostring(total_trades), text_color=color.white, text_size=size.normal)
+
+    // --- NEW METRICS ---
+    
+    // Avg Win
+    table.cell(dash, 0, 5, "Avg Win:", text_color=color.silver, text_size=size.normal)
+    table.cell(dash, 1, 5, "+" + str.tostring(avg_win, "#.##") + "%", text_color=color.green, text_size=size.normal)
+
+    // Avg Loss
+    table.cell(dash, 0, 6, "Avg Loss:", text_color=color.silver, text_size=size.normal)
+    table.cell(dash, 1, 6, "-" + str.tostring(avg_loss, "#.##") + "%", text_color=color.red, text_size=size.normal)
+
+    // Expectancy
+    table.cell(dash, 0, 7, "Expectancy:", text_color=color.white, text_size=size.normal)
+    // If Expectancy is positive, strategy is viable
+    exp_col = expectancy > 0 ? color.lime : color.red
+    table.cell(dash, 1, 7, str.tostring(expectancy, "#.##") + "%", text_color=exp_col, text_size=size.normal)
